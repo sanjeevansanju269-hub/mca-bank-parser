@@ -1,16 +1,7 @@
-"""
-MCA Bank Statement Parser — FastAPI Backend
-Accepts PDF upload, runs pdfplumber + analysis, returns Excel underwriting schedule.
-Deploy on Render.com (free tier) or Railway.app.
-"""
-
 import os
 import io
 import re
-import uuid
-import tempfile
 from datetime import datetime
-from typing import Optional
 
 import pdfplumber
 import pandas as pd
@@ -19,11 +10,11 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
 
 app = FastAPI(
     title="XGen Automations — MCA Bank Statement Parser",
-    description="Instantly parse bank statement PDFs into Excel underwriting schedules. Built by XGen Automations.",
+    description="All-in-one MCA Bank Statement Underwriting Engine",
     version="1.0.0"
 )
 
@@ -34,6 +25,303 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+HTML_PAGE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MCA Bank Statement Parser | XGen Automations</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: #0a0f1e;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .card {
+      background: #111827;
+      border: 1px solid #1e40af;
+      border-radius: 16px;
+      padding: 44px 40px;
+      max-width: 580px;
+      width: 100%;
+      box-shadow: 0 0 60px rgba(30, 64, 175, 0.2);
+    }
+    .badge {
+      display: inline-block;
+      background: rgba(30, 64, 175, 0.25);
+      color: #60a5fa;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      padding: 4px 12px;
+      border-radius: 100px;
+      border: 1px solid rgba(96, 165, 250, 0.3);
+      margin-bottom: 16px;
+    }
+    h1 {
+      font-size: 26px;
+      font-weight: 700;
+      color: #f1f5f9;
+      line-height: 1.3;
+      margin-bottom: 8px;
+    }
+    p.sub {
+      color: #94a3b8;
+      font-size: 14px;
+      margin-bottom: 28px;
+      line-height: 1.6;
+    }
+    .upload-zone {
+      border: 2px dashed #1e40af;
+      border-radius: 12px;
+      padding: 32px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      background: rgba(30, 64, 175, 0.04);
+      position: relative;
+    }
+    .upload-zone:hover, .upload-zone.drag {
+      border-color: #3b82f6;
+      background: rgba(59, 130, 246, 0.08);
+    }
+    .upload-zone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+    }
+    .upload-icon { font-size: 36px; margin-bottom: 10px; }
+    .upload-zone p { color: #64748b; font-size: 14px; }
+    .upload-zone strong { color: #93c5fd; }
+    .filename-display {
+      margin-top: 12px;
+      color: #34d399;
+      font-size: 13px;
+      font-weight: 500;
+      display: none;
+    }
+    .btn {
+      display: block;
+      width: 100%;
+      margin-top: 20px;
+      padding: 14px;
+      background: #1d4ed8;
+      color: white;
+      font-size: 15px;
+      font-weight: 600;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background 0.2s;
+      letter-spacing: 0.3px;
+    }
+    .btn:hover:not(:disabled) { background: #2563eb; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status {
+      margin-top: 18px;
+      padding: 14px 16px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 500;
+      display: none;
+    }
+    .status.loading { background: rgba(251, 191, 36, 0.1); color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.3); }
+    .status.success { background: rgba(52, 211, 153, 0.1); color: #34d399; border: 1px solid rgba(52, 211, 153, 0.3); }
+    .status.error { background: rgba(239, 68, 68, 0.1); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-top: 20px;
+      display: none;
+    }
+    .metric-card {
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .metric-card .label { color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+    .metric-card .value { color: #f1f5f9; font-size: 17px; font-weight: 700; }
+    .metric-card .value.red { color: #f87171; }
+    .metric-card .value.green { color: #34d399; }
+    .divider { border: none; border-top: 1px solid #1e293b; margin: 28px 0; }
+    .features { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
+    .feature { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #64748b; }
+    .feature span { color: #3b82f6; }
+    footer { margin-top: 28px; color: #475569; font-size: 12px; text-align: center; }
+    footer a { color: #3b82f6; text-decoration: none; }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <div class="badge">XGen Automations</div>
+  <h1>MCA Bank Statement Parser</h1>
+  <p class="sub">Upload any bank statement PDF. We extract every transaction, calculate Average Daily Balance (ADB), NSF count, and generate an Excel underwriting schedule in seconds.</p>
+
+  <div class="upload-zone" id="uploadZone">
+    <input type="file" id="fileInput" accept=".pdf" />
+    <div class="upload-icon">📄</div>
+    <p><strong>Click to upload</strong> or drag and drop</p>
+    <p style="margin-top:4px; font-size:12px;">PDF bank statements only · Max 20MB</p>
+    <div class="filename-display" id="filenameDisplay"></div>
+  </div>
+
+  <button class="btn" id="parseBtn" disabled onclick="parsePDF()">
+    ⚡ Parse & Download Excel
+  </button>
+
+  <div class="status" id="statusBox"></div>
+
+  <div class="metrics-grid" id="metricsGrid">
+    <div class="metric-card">
+      <div class="label">Total Deposits</div>
+      <div class="value green" id="m_deposits">—</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Total Withdrawals</div>
+      <div class="value red" id="m_withdrawals">—</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Avg Daily Balance</div>
+      <div class="value green" id="m_adb">—</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">NSF Count</div>
+      <div class="value" id="m_nsf">—</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Net Cash Flow</div>
+      <div class="value" id="m_net">—</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Transactions Found</div>
+      <div class="value" id="m_txn">—</div>
+    </div>
+  </div>
+
+  <hr class="divider"/>
+
+  <div class="features">
+    <div class="feature"><span>✓</span> Scanned PDFs supported</div>
+    <div class="feature"><span>✓</span> Auto ADB calculation</div>
+    <div class="feature"><span>✓</span> NSF & Overdraft detection</div>
+    <div class="feature"><span>✓</span> Styled Excel output</div>
+  </div>
+</div>
+
+<footer>
+  Built by <a href="https://xgenautomations.com" target="_blank">XGen Automations</a> · For MCA brokers & commercial lenders
+</footer>
+
+<script>
+  const fileInput = document.getElementById("fileInput");
+  const parseBtn = document.getElementById("parseBtn");
+  const filenameDisplay = document.getElementById("filenameDisplay");
+  const statusBox = document.getElementById("statusBox");
+  const metricsGrid = document.getElementById("metricsGrid");
+  const uploadZone = document.getElementById("uploadZone");
+
+  let selectedFile = null;
+
+  fileInput.addEventListener("change", () => {
+    selectedFile = fileInput.files[0];
+    if (selectedFile) {
+      filenameDisplay.style.display = "block";
+      filenameDisplay.textContent = "✓ " + selectedFile.name;
+      parseBtn.disabled = false;
+    }
+  });
+
+  uploadZone.addEventListener("dragover", (e) => { e.preventDefault(); uploadZone.classList.add("drag"); });
+  uploadZone.addEventListener("dragleave", () => uploadZone.classList.remove("drag"));
+  uploadZone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    uploadZone.classList.remove("drag");
+    if (e.dataTransfer.files[0]) {
+      fileInput.files = e.dataTransfer.files;
+      fileInput.dispatchEvent(new Event("change"));
+    }
+  });
+
+  function showStatus(type, msg) {
+    statusBox.className = "status " + type;
+    statusBox.style.display = "block";
+    statusBox.textContent = msg;
+  }
+
+  function fmt(val) { return "$" + parseFloat(val).toLocaleString("en-US", {minimumFractionDigits: 2}); }
+
+  async function parsePDF() {
+    if (!selectedFile) return;
+
+    parseBtn.disabled = true;
+    parseBtn.textContent = "⏳ Processing...";
+    showStatus("loading", "Extracting transactions and calculating underwriting metrics...");
+    metricsGrid.style.display = "none";
+
+    try {
+      const previewForm = new FormData();
+      previewForm.append("file", selectedFile);
+      const previewRes = await fetch("/parse-pdf-preview", { method: "POST", body: previewForm });
+
+      if (previewRes.ok) {
+        const preview = await previewRes.json();
+        const m = preview.metrics;
+        document.getElementById("m_deposits").textContent = fmt(m.total_deposits);
+        document.getElementById("m_withdrawals").textContent = fmt(m.total_withdrawals);
+        document.getElementById("m_adb").textContent = fmt(m.average_daily_balance);
+        document.getElementById("m_nsf").textContent = m.nsf_count;
+        document.getElementById("m_net").textContent = fmt(m.net_cash_flow);
+        document.getElementById("m_txn").textContent = m.transaction_count + " txns";
+        document.getElementById("m_net").className = "value " + (m.net_cash_flow >= 0 ? "green" : "red");
+        metricsGrid.style.display = "grid";
+      }
+
+      const downloadForm = new FormData();
+      downloadForm.append("file", selectedFile);
+      const downloadRes = await fetch("/parse-pdf", { method: "POST", body: downloadForm });
+
+      if (!downloadRes.ok) {
+        const err = await downloadRes.json();
+        throw new Error(err.detail || "Processing failed.");
+      }
+
+      const blob = await downloadRes.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = selectedFile.name.replace(".pdf", "_Underwriting_Schedule.xlsx");
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      showStatus("success", "✓ Underwriting Excel generated and downloaded!");
+    } catch (err) {
+      showStatus("error", "Error: " + err.message);
+    }
+
+    parseBtn.disabled = false;
+    parseBtn.textContent = "⚡ Parse & Download Excel";
+  }
+</script>
+
+</body>
+</html>"""
 
 def clean_amount(val):
     if not val:
@@ -47,7 +335,6 @@ def clean_amount(val):
         return 0.0
 
 def extract_transactions(pdf_bytes: bytes):
-    """Extract all transactions from PDF bytes using pdfplumber."""
     transactions = []
     text_lines = []
 
@@ -81,7 +368,6 @@ def extract_transactions(pdf_bytes: bytes):
                             "Type": txn_type
                         })
 
-    # Fallback: regex parse raw text if table extraction got nothing
     if not transactions:
         full_text = "\n".join(text_lines)
         pattern = re.compile(
@@ -103,7 +389,6 @@ def extract_transactions(pdf_bytes: bytes):
     return transactions, total_pages
 
 def calculate_metrics(transactions):
-    """Calculate ADB, Deposits, Withdrawals, NSF count, Negative Days."""
     if not transactions:
         return {
             "total_deposits": 0.0,
@@ -143,12 +428,10 @@ def calculate_metrics(transactions):
     }
 
 def build_excel(transactions, metrics, filename="statement") -> bytes:
-    """Build a professionally styled Excel underwriting schedule."""
     wb = Workbook()
     ws = wb.active
     ws.title = "Underwriting Schedule"
 
-    # Styles
     navy = "003366"
     light_blue = "D6E4F0"
     green = "1A7A4A"
@@ -165,7 +448,6 @@ def build_excel(transactions, metrics, filename="statement") -> bytes:
         s = Side(style="thin", color="CCCCCC")
         return Border(left=s, right=s, top=s, bottom=s)
 
-    # ── Title Block ──
     ws.merge_cells("A1:F1")
     ws["A1"] = "XGen Automations — MCA Bank Statement Underwriting Schedule"
     ws["A1"].font = title_font
@@ -176,9 +458,8 @@ def build_excel(transactions, metrics, filename="statement") -> bytes:
     ws["A2"].font = Font(name="Calibri", italic=True, size=9, color="666666")
     ws["A2"].alignment = center
 
-    ws.append([])  # blank row 3
+    ws.append([])
 
-    # ── Summary Block ──
     summary_headers = ["Total Deposits", "Total Withdrawals", "Net Cash Flow",
                         "Avg Daily Balance", "NSF Count", "Negative Days"]
     summary_values = [
@@ -204,9 +485,8 @@ def build_excel(transactions, metrics, filename="statement") -> bytes:
         v_cell.alignment = center
         v_cell.border = border()
 
-    ws.append([])  # blank row 6
+    ws.append([])
 
-    # ── Transaction Table ──
     col_headers = ["Date", "Description", "Amount ($)", "Balance ($)", "Type"]
     for col_idx, h in enumerate(col_headers, start=1):
         cell = ws.cell(row=7, column=col_idx, value=h)
@@ -229,7 +509,6 @@ def build_excel(transactions, metrics, filename="statement") -> bytes:
             if col_idx == 3 and isinstance(val, float) and val < 0:
                 cell.font = Font(name="Calibri", size=10, color=red)
 
-    # Column widths
     ws.column_dimensions["A"].width = 14
     ws.column_dimensions["B"].width = 38
     ws.column_dimensions["C"].width = 16
@@ -245,35 +524,21 @@ def build_excel(transactions, metrics, filename="statement") -> bytes:
     output.seek(0)
     return output.read()
 
+# ── ROUTES ──
 
-# ─────────────────────────────────────────────────────────
-#  API ROUTES
-# ─────────────────────────────────────────────────────────
-
-@app.get("/")
-def root():
-    return {
-        "service": "XGen Automations — MCA Bank Statement Parser",
-        "status": "online",
-        "usage": "POST /parse-pdf with a PDF file attached (field: file)",
-        "version": "1.0.0"
-    }
+@app.get("/", response_class=HTMLResponse)
+@app.get("/index.html", response_class=HTMLResponse)
+def serve_ui():
+    return HTML_PAGE
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "service": "XGen Automations MCA Parser"}
 
 @app.post("/parse-pdf")
 async def parse_pdf(file: UploadFile = File(...)):
-    """
-    Upload a bank statement PDF.
-    Returns a professionally styled Excel underwriting schedule as a download.
-    """
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Please upload a PDF file.")
-
-    if file.size and file.size > 20 * 1024 * 1024:  # 20MB limit
-        raise HTTPException(status_code=400, detail="File too large. Max 20MB.")
 
     try:
         pdf_bytes = await file.read()
@@ -288,15 +553,11 @@ async def parse_pdf(file: UploadFile = File(...)):
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": f'attachment; filename="{output_filename}"'}
         )
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Parsing error: {str(e)}")
 
 @app.post("/parse-pdf-preview")
 async def parse_pdf_preview(file: UploadFile = File(...)):
-    """
-    Same as /parse-pdf but returns JSON preview of metrics (for live dashboard display).
-    """
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Please upload a PDF file.")
 
@@ -310,8 +571,7 @@ async def parse_pdf_preview(file: UploadFile = File(...)):
             "filename": file.filename,
             "pages_processed": total_pages,
             "metrics": metrics,
-            "transactions_preview": transactions[:10],
-            "message": "Parsing complete. Download /parse-pdf for full Excel."
+            "transactions_preview": transactions[:10]
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Preview error: {str(e)}")
