@@ -22,13 +22,13 @@
       border: 1px solid #1e40af;
       border-radius: 16px;
       padding: 44px 40px;
-      max-width: 560px;
+      max-width: 580px;
       width: 100%;
-      box-shadow: 0 0 60px rgba(30, 64, 175, 0.15);
+      box-shadow: 0 0 60px rgba(30, 64, 175, 0.2);
     }
     .badge {
       display: inline-block;
-      background: rgba(30, 64, 175, 0.2);
+      background: rgba(30, 64, 175, 0.25);
       color: #60a5fa;
       font-size: 11px;
       font-weight: 600;
@@ -49,7 +49,7 @@
     p.sub {
       color: #94a3b8;
       font-size: 14px;
-      margin-bottom: 32px;
+      margin-bottom: 28px;
       line-height: 1.6;
     }
     .upload-zone {
@@ -126,14 +126,14 @@
       padding: 14px;
     }
     .metric-card .label { color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
-    .metric-card .value { color: #f1f5f9; font-size: 18px; font-weight: 700; }
+    .metric-card .value { color: #f1f5f9; font-size: 17px; font-weight: 700; }
     .metric-card .value.red { color: #f87171; }
     .metric-card .value.green { color: #34d399; }
     .divider { border: none; border-top: 1px solid #1e293b; margin: 28px 0; }
-    .features { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 24px; }
+    .features { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
     .feature { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #64748b; }
     .feature span { color: #3b82f6; }
-    footer { margin-top: 28px; color: #334155; font-size: 12px; text-align: center; }
+    footer { margin-top: 28px; color: #475569; font-size: 12px; text-align: center; }
     footer a { color: #3b82f6; text-decoration: none; }
   </style>
 </head>
@@ -142,7 +142,7 @@
 <div class="card">
   <div class="badge">XGen Automations</div>
   <h1>MCA Bank Statement Parser</h1>
-  <p class="sub">Upload any bank statement PDF. We extract every transaction, calculate Average Daily Balance, NSF count, and export a clean underwriting Excel — in under 10 seconds.</p>
+  <p class="sub">Upload any bank statement PDF. We extract every transaction, calculate Average Daily Balance (ADB), NSF count, and generate an Excel underwriting schedule in seconds.</p>
 
   <div class="upload-zone" id="uploadZone">
     <input type="file" id="fileInput" accept=".pdf" />
@@ -192,7 +192,6 @@
     <div class="feature"><span>✓</span> Auto ADB calculation</div>
     <div class="feature"><span>✓</span> NSF & Overdraft detection</div>
     <div class="feature"><span>✓</span> Styled Excel output</div>
-    <div class="feature"><span>✓</span> File deleted after processing</div>
   </div>
 </div>
 
@@ -201,9 +200,6 @@
 </footer>
 
 <script>
-  // ── IMPORTANT: Set this to your Render.com deployment URL after deploy ──
-  const BACKEND_URL = "https://mca-parser.onrender.com";
-
   const fileInput = document.getElementById("fileInput");
   const parseBtn = document.getElementById("parseBtn");
   const filenameDisplay = document.getElementById("filenameDisplay");
@@ -246,14 +242,13 @@
 
     parseBtn.disabled = true;
     parseBtn.textContent = "⏳ Processing...";
-    showStatus("loading", "Uploading and parsing your bank statement... This takes 5–15 seconds.");
+    showStatus("loading", "Extracting transactions and calculating underwriting metrics...");
     metricsGrid.style.display = "none";
 
     try {
-      // Step 1: Get preview metrics
       const previewForm = new FormData();
       previewForm.append("file", selectedFile);
-      const previewRes = await fetch(`${BACKEND_URL}/parse-pdf-preview`, { method: "POST", body: previewForm });
+      const previewRes = await fetch("/api/parse-pdf-preview", { method: "POST", body: previewForm });
 
       if (previewRes.ok) {
         const preview = await previewRes.json();
@@ -263,15 +258,14 @@
         document.getElementById("m_adb").textContent = fmt(m.average_daily_balance);
         document.getElementById("m_nsf").textContent = m.nsf_count;
         document.getElementById("m_net").textContent = fmt(m.net_cash_flow);
-        document.getElementById("m_txn").textContent = m.transaction_count + " transactions";
+        document.getElementById("m_txn").textContent = m.transaction_count + " txns";
         document.getElementById("m_net").className = "value " + (m.net_cash_flow >= 0 ? "green" : "red");
         metricsGrid.style.display = "grid";
       }
 
-      // Step 2: Download the Excel
       const downloadForm = new FormData();
       downloadForm.append("file", selectedFile);
-      const downloadRes = await fetch(`${BACKEND_URL}/parse-pdf`, { method: "POST", body: downloadForm });
+      const downloadRes = await fetch("/api/parse-pdf", { method: "POST", body: downloadForm });
 
       if (!downloadRes.ok) {
         const err = await downloadRes.json();
@@ -288,9 +282,9 @@
       a.remove();
       URL.revokeObjectURL(url);
 
-      showStatus("success", "✓ Excel downloaded successfully! Check your Downloads folder.");
+      showStatus("success", "✓ Underwriting Excel generated and downloaded!");
     } catch (err) {
-      showStatus("error", "Error: " + err.message + ". Please check the backend URL or try again.");
+      showStatus("error", "Error: " + err.message);
     }
 
     parseBtn.disabled = false;
